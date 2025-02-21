@@ -1,0 +1,703 @@
+To implement the "Save Draft" functionality in a Java Spring Boot project, follow these steps:
+
+## **Solution Approach**
+1. **Database Design:**
+   - Create a `draft_table` to temporarily store form data.
+   - Create a `master_table` to store finalized form data.
+   - Ensure that each entry in `draft_table` is linked to a `user_id`.
+
+2. **API Endpoints:**
+   - `POST /saveDraft` → Saves form data in `draft_table`.
+   - `GET /getDraft` → Retrieves saved draft data.
+   - `POST /finalSubmit` → Moves all draft data to `master_table` and deletes drafts.
+
+3. **Implementation Steps:**
+   - When a user clicks "Save as Draft," store partial form data in `draft_table`.
+   - When the "Final Submit" button is clicked, move all saved draft entries for the user to `master_table`, then delete them from `draft_table`.
+
+---
+
+## **Complete Implementation**
+### **1. Database Schema (Using JPA)**
+#### **Entity for Draft Table**
+```java
+@Entity
+@Table(name = "draft_table")
+public class Draft {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+    private int formNumber; // To track which form draft belongs to
+    private String formData; // Store form JSON data
+
+    private boolean isFinalized = false; // To track final submission
+
+    // Constructors, Getters, Setters
+}
+```
+
+#### **Entity for Master Table**
+```java
+@Entity
+@Table(name = "master_table")
+public class Master {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+    private String formData; // Merged form data from all drafts
+
+    private LocalDateTime submittedAt;
+
+    // Constructors, Getters, Setters
+}
+```
+
+---
+
+### **2. Repository Layer**
+#### **Draft Repository**
+```java
+@Repository
+public interface DraftRepository extends JpaRepository<Draft, Long> {
+    List<Draft> findByUserId(Long userId);
+    void deleteByUserId(Long userId);
+}
+```
+
+#### **Master Repository**
+```java
+@Repository
+public interface MasterRepository extends JpaRepository<Master, Long> {
+}
+```
+
+---
+
+### **3. Service Layer**
+#### **Draft Service**
+```java
+@Service
+public class DraftService {
+    
+    @Autowired
+    private DraftRepository draftRepository;
+
+    @Autowired
+    private MasterRepository masterRepository;
+
+    public Draft saveDraft(Long userId, int formNumber, String formData) {
+        Draft draft = new Draft();
+        draft.setUserId(userId);
+        draft.setFormNumber(formNumber);
+        draft.setFormData(formData);
+        return draftRepository.save(draft);
+    }
+
+    public List<Draft> getDrafts(Long userId) {
+        return draftRepository.findByUserId(userId);
+    }
+
+    public String finalSubmit(Long userId) {
+        List<Draft> drafts = draftRepository.findByUserId(userId);
+        
+        if (drafts.isEmpty()) {
+            return "No draft data found for final submission.";
+        }
+
+        // Merge all form data
+        StringBuilder finalFormData = new StringBuilder();
+        for (Draft draft : drafts) {
+            finalFormData.append(draft.getFormData()).append("\n"); // Merging drafts
+        }
+
+        // Save into Master table
+        Master master = new Master();
+        master.setUserId(userId);
+        master.setFormData(finalFormData.toString());
+        master.setSubmittedAt(LocalDateTime.now());
+
+        masterRepository.save(master);
+
+        // Delete drafts
+        draftRepository.deleteByUserId(userId);
+
+        return "Final submission successful!";
+    }
+}
+```
+
+---
+
+### **4. Controller Layer**
+#### **Draft Controller**
+```java
+@RestController
+@RequestMapping("/api/forms")
+public class DraftController {
+
+    @Autowired
+    private DraftService draftService;
+
+    @PostMapping("/saveDraft")
+    public ResponseEntity<Draft> saveDraft(@RequestParam Long userId, 
+                                           @RequestParam int formNumber, 
+                                           @RequestBody String formData) {
+        Draft savedDraft = draftService.saveDraft(userId, formNumber, formData);
+        return ResponseEntity.ok(savedDraft);
+    }
+
+    @GetMapping("/getDraft")
+    public ResponseEntity<List<Draft>> getDrafts(@RequestParam Long userId) {
+        return ResponseEntity.ok(draftService.getDrafts(userId));
+    }
+
+    @PostMapping("/finalSubmit")
+    public ResponseEntity<String> finalSubmit(@RequestParam Long userId) {
+        String message = draftService.finalSubmit(userId);
+        return ResponseEntity.ok(message);
+    }
+}
+```
+
+---
+
+## **How It Works**
+1. **Save Draft**
+   - User fills the form and clicks "Save as Draft."
+   - The API `/saveDraft` stores the form data in `draft_table`.
+
+2. **Retrieve Draft**
+   - When the user returns, `/getDraft` fetches the saved draft data.
+
+3. **Final Submit**
+   - When the user clicks "Final Submit," `/finalSubmit` moves all draft data to `master_table`, deleting them from `draft_table`.
+
+---
+
+### **Database Tables Example**
+#### **Draft Table (Before Final Submission)**
+| id | userId | formNumber | formData      | isFinalized |
+|----|--------|-----------|---------------|-------------|
+| 1  | 101    | 1         | `{json data}` | false       |
+| 2  | 101    | 2         | `{json data}` | false       |
+
+#### **Master Table (After Final Submission)**
+| id | userId | formData              | submittedAt |
+|----|--------|-----------------------|-------------|
+| 1  | 101    | `{merged json data}`  | 2025-02-20  |
+
+---
+
+## **Improvements & Enhancements**
+- **Validation**: Ensure all fields are correctly filled before final submission.
+- **Security**: Implement user authentication with JWT.
+- **Frontend Integration**: Connect API with a frontend for a seamless UI.
+
+---
+
+This implementation ensures that users can save progress and submit all forms together when they are ready. 🚀 Let me know if you need modifications! 😊
+
+=======================================================================================
+
+If **JSON data is stored in the draft table**, and now you need to move it to the **master table** with individual column mapping, follow these steps:  
+
+---
+
+## **1️⃣ Understanding the Data Flow**
+- Users **save draft** → JSON data is stored in the `draft_table` (`JSONB` column).  
+- On **final submission**, JSON data needs to be **extracted** and mapped to the respective columns in the **master table**.  
+
+---
+
+## **2️⃣ Database Schema**
+### **Draft Table (Stores JSON Data)**
+```sql
+CREATE TABLE draft_table (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    form_type VARCHAR(50) NOT NULL,
+    form_data JSONB NOT NULL,
+    saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### **Master Table (Stores Structured Data)**
+```sql
+CREATE TABLE master_table (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    name VARCHAR(255),
+    email VARCHAR(255),
+    age INT,
+    address TEXT,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## **3️⃣ Spring Boot Implementation**
+### **🔹 Draft Entity (JSON Storage)**
+```java
+import javax.persistence.*;
+import com.fasterxml.jackson.databind.JsonNode;
+
+@Entity
+@Table(name = "draft_table")
+public class Draft {
+    
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+    private String formType;
+
+    @Column(columnDefinition = "jsonb")
+    private JsonNode formData; // Store JSON directly
+
+    private LocalDateTime savedAt;
+    
+    // Getters and Setters
+}
+```
+
+---
+
+### **🔹 Master Entity (Final Structured Data)**
+```java
+import javax.persistence.*;
+
+@Entity
+@Table(name = "master_table")
+public class Master {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+    private String name;
+    private String email;
+    private Integer age;
+    private String address;
+
+    private LocalDateTime submittedAt;
+    
+    // Getters and Setters
+}
+```
+
+---
+
+## **4️⃣ Service Layer: Extract JSON & Save to Master Table**
+```java
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import java.util.List;
+import java.util.Optional;
+
+@Service
+public class FormService {
+
+    @Autowired
+    private DraftRepository draftRepository;
+
+    @Autowired
+    private MasterRepository masterRepository;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    public String saveFinalData(Long userId) {
+        try {
+            // Step 1: Fetch All Drafts for the User
+            List<Draft> drafts = draftRepository.findByUserId(userId);
+
+            if (drafts.isEmpty()) {
+                return "No draft data found for user.";
+            }
+
+            // Step 2: Extract Data from JSON & Save in Master Table
+            for (Draft draft : drafts) {
+                JsonNode jsonData = draft.getFormData();
+
+                // Step 3: Map JSON fields to Master entity
+                Master master = new Master();
+                master.setUserId(userId);
+                master.setName(jsonData.has("name") ? jsonData.get("name").asText() : null);
+                master.setEmail(jsonData.has("email") ? jsonData.get("email").asText() : null);
+                master.setAge(jsonData.has("age") ? jsonData.get("age").asInt() : null);
+                master.setAddress(jsonData.has("address") ? jsonData.get("address").asText() : null);
+                master.setSubmittedAt(LocalDateTime.now());
+
+                masterRepository.save(master);
+            }
+
+            // Step 4: Delete Draft Data After Final Submission
+            draftRepository.deleteByUserId(userId);
+
+            return "Final submission successful!";
+        } catch (Exception e) {
+            return "Error during final submission: " + e.getMessage();
+        }
+    }
+}
+```
+
+---
+
+## **5️⃣ Repository Layer**
+### **Draft Repository**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.List;
+
+public interface DraftRepository extends JpaRepository<Draft, Long> {
+    List<Draft> findByUserId(Long userId);
+    void deleteByUserId(Long userId);
+}
+```
+
+### **Master Repository**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface MasterRepository extends JpaRepository<Master, Long> {
+}
+```
+
+---
+
+## **6️⃣ Controller to Handle Final Submission**
+```java
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/forms")
+public class FormController {
+
+    @Autowired
+    private FormService formService;
+
+    @PostMapping("/finalSubmit")
+    public ResponseEntity<String> finalSubmit(@RequestParam Long userId) {
+        String response = formService.saveFinalData(userId);
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+---
+
+## **7️⃣ Summary of How This Works**
+✅ **User Saves Draft** → Data is stored as JSON in `draft_table`.  
+✅ **On Final Submission** →  
+   - Fetch all saved drafts for `user_id`.  
+   - Extract data from JSON.  
+   - Map JSON fields to individual columns in `master_table`.  
+   - Save structured data in `master_table`.  
+   - **Delete draft data** after final submission.  
+
+This ensures:
+✔️ **JSON flexibility** for drafts.  
+✔️ **Structured storage** for the final submission.  
+✔️ **Automatic deletion of drafts** after submission.  
+
+🚀 Let me know if you need modifications! 😊
+
+================================================================================================
+
+### **📌 Requirement Recap:**
+- The application has **4 forms (tabs)** where users can **save drafts** at any step.
+- Once all forms are filled, clicking **"Final Submit"** should **merge the drafts** and store the data into a **single master table**.
+- The **draft data** is stored in **JSON format** in a `draft_table`.
+- The final submission should **map JSON fields to structured columns** in a **single master table**.
+
+---
+
+## **💡 Database Schema**
+### **🔹 Draft Table (Stores JSON Data)**
+Stores **draft form data** before final submission.
+
+```sql
+CREATE TABLE draft_table (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    form_data JSONB NOT NULL,
+    saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### **🔹 Master Table (Final Merged Data)**
+Stores **final structured form data**.
+
+```sql
+CREATE TABLE master_table (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    name VARCHAR(255),
+    email VARCHAR(255),
+    phone VARCHAR(15),
+    address TEXT,
+    qualification VARCHAR(255),
+    experience INT,
+    skills TEXT,
+    project_details TEXT,
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## **1️⃣ Draft Entity (Stores JSON Data)**
+```java
+import javax.persistence.*;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "draft_table")
+public class Draft {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+
+    @Column(columnDefinition = "jsonb")
+    private JsonNode formData; // Stores JSON data
+
+    private LocalDateTime savedAt = LocalDateTime.now();
+
+    // Getters and Setters
+}
+```
+
+---
+
+## **2️⃣ Master Entity (Final Structured Data)**
+```java
+import javax.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "master_table")
+public class Master {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private Long userId;
+    private String name;
+    private String email;
+    private String phone;
+    private String address;
+    private String qualification;
+    private Integer experience;
+    private String skills;
+    private String projectDetails;
+
+    private LocalDateTime submittedAt = LocalDateTime.now();
+
+    // Getters and Setters
+}
+```
+
+---
+
+## **3️⃣ DTO (Used to Extract Data from JSON)**
+```java
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+public class FormDTO {
+    private String name;
+    private String email;
+    private String phone;
+    private String address;
+    private String qualification;
+    private Integer experience;
+    private String skills;
+    private String projectDetails;
+
+    // Getters and Setters
+}
+```
+
+---
+
+## **4️⃣ Service Layer: Extract JSON & Save to Master Table**
+```java
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import java.util.List;
+
+@Service
+public class FormService {
+
+    @Autowired
+    private DraftRepository draftRepository;
+
+    @Autowired
+    private MasterRepository masterRepository;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    public String saveFinalData(Long userId) {
+        try {
+            // Step 1: Fetch All Drafts for the User
+            List<Draft> drafts = draftRepository.findByUserId(userId);
+
+            if (drafts.isEmpty()) {
+                return "No draft data found for user.";
+            }
+
+            // Step 2: Merge JSON Data from all draft entries
+            FormDTO mergedData = new FormDTO();
+            for (Draft draft : drafts) {
+                JsonNode jsonData = draft.getFormData();
+
+                if (jsonData.has("name")) mergedData.setName(jsonData.get("name").asText());
+                if (jsonData.has("email")) mergedData.setEmail(jsonData.get("email").asText());
+                if (jsonData.has("phone")) mergedData.setPhone(jsonData.get("phone").asText());
+                if (jsonData.has("address")) mergedData.setAddress(jsonData.get("address").asText());
+                if (jsonData.has("qualification")) mergedData.setQualification(jsonData.get("qualification").asText());
+                if (jsonData.has("experience")) mergedData.setExperience(jsonData.get("experience").asInt());
+                if (jsonData.has("skills")) mergedData.setSkills(jsonData.get("skills").asText());
+                if (jsonData.has("projectDetails")) mergedData.setProjectDetails(jsonData.get("projectDetails").asText());
+            }
+
+            // Step 3: Save in Master Table
+            Master master = new Master();
+            master.setUserId(userId);
+            master.setName(mergedData.getName());
+            master.setEmail(mergedData.getEmail());
+            master.setPhone(mergedData.getPhone());
+            master.setAddress(mergedData.getAddress());
+            master.setQualification(mergedData.getQualification());
+            master.setExperience(mergedData.getExperience());
+            master.setSkills(mergedData.getSkills());
+            master.setProjectDetails(mergedData.getProjectDetails());
+
+            masterRepository.save(master);
+
+            // Step 4: Delete Draft Data After Final Submission
+            draftRepository.deleteByUserId(userId);
+
+            return "Final submission successful!";
+        } catch (Exception e) {
+            return "Error during final submission: " + e.getMessage();
+        }
+    }
+}
+```
+
+---
+
+## **5️⃣ Repository Layer**
+### **Draft Repository**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.List;
+
+public interface DraftRepository extends JpaRepository<Draft, Long> {
+    List<Draft> findByUserId(Long userId);
+    void deleteByUserId(Long userId);
+}
+```
+
+### **Master Repository**
+```java
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface MasterRepository extends JpaRepository<Master, Long> {
+}
+```
+
+---
+
+## **6️⃣ Controller to Handle Draft Saving and Final Submission**
+```java
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/forms")
+public class FormController {
+
+    @Autowired
+    private FormService formService;
+
+    @Autowired
+    private DraftRepository draftRepository;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    // Save form as draft
+    @PostMapping("/saveDraft")
+    public ResponseEntity<String> saveDraft(@RequestParam Long userId, @RequestBody String jsonData) {
+        try {
+            JsonNode formData = objectMapper.readTree(jsonData);
+
+            Draft draft = new Draft();
+            draft.setUserId(userId);
+            draft.setFormData(formData);
+
+            draftRepository.save(draft);
+
+            return ResponseEntity.ok("Draft saved successfully!");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Error saving draft: " + e.getMessage());
+        }
+    }
+
+    // Final Submit: Move Draft Data to Master Table
+    @PostMapping("/finalSubmit")
+    public ResponseEntity<String> finalSubmit(@RequestParam Long userId) {
+        String response = formService.saveFinalData(userId);
+        return ResponseEntity.ok(response);
+    }
+}
+```
+
+---
+
+## **7️⃣ API Endpoints**
+| **Action**          | **Method** | **Endpoint**             | **Payload** |
+|---------------------|-----------|--------------------------|-------------|
+| Save Draft         | `POST`     | `/api/forms/saveDraft`   | `{ "name": "John", "email": "john@example.com", ... }` |
+| Final Submit       | `POST`     | `/api/forms/finalSubmit?userId=1` | No Body |
+
+---
+
+## **8️⃣ Summary**
+✅ **Single `master_table`** stores all form data after submission.  
+✅ **`draft_table` stores JSON data** until the final submit.  
+✅ **On final submission**:
+   - Fetch all drafts → **Merge JSON Data** → **Map to structured columns** → **Save to master_table**.  
+   - **Delete draft data** after submission.  
+
+This ensures:
+✔️ **Simplified structure** (single master table).  
+✔️ **JSON flexibility** for drafts.  
+✔️ **Structured final storage**.  
+
+🚀 Let me know if you need modifications! 😊
+
